@@ -103,17 +103,6 @@ public class HashRingTests
     }
 
     [Fact]
-    public void FindNodeFor_WithIdenticalKey_ReturnsExactNode()
-    {
-        var hashRing = new HashRing();
-        var nodeKey = "node1";
-        hashRing.AddNode(nodeKey);
-        hashRing.AddNode("node2");
-        var result = hashRing.FindNodeFor(nodeKey);
-        Assert.Equal(nodeKey, result);
-    }
-
-    [Fact]
     public void FindNodeFor_WithMultipleNodes_ReturnsConsistentResults()
     {
         var hashRing = new HashRing();
@@ -158,6 +147,72 @@ public class HashRingTests
             var newNode = hashRing.FindNodeFor(key);
             Assert.True(newNode is "node1" or "node3");
         }
+    }
+
+    [Fact]
+    public void Creating_Ring_With_Zero_VNode_Count_Throws()
+    {
+        Assert.ThrowsAny<ArgumentException>(() => new HashRing(0));
+    }
+
+    /// <summary>
+    /// Verifies that virtual nodes improve load distribution across nodes in a consistent hash ring.
+    /// 
+    /// Virtual nodes are a key feature of consistent hashing that helps solve the "hot spot" problem
+    /// where keys might cluster around certain physical nodes, creating uneven load distribution.
+    /// 
+    /// This test demonstrates that:
+    /// 1. With few virtual nodes (1 per physical node), keys may distribute unevenly
+    /// 2. With many virtual nodes (100 per physical node), keys distribute more evenly
+    /// 3. Better distribution is measured by lower variance in key counts per node
+    /// 
+    /// The test works by:
+    /// - Creating two identical rings with different virtual node counts
+    /// - Distributing 10,000 test keys across both rings
+    /// - Calculating the variance in how many keys each physical node receives
+    /// - Asserting that the multi-virtual-node ring has lower variance (better distribution)
+    /// 
+    /// A lower variance indicates that the load is more evenly distributed across all nodes,
+    /// which is the primary benefit of using virtual nodes in consistent hashing.
+    ///
+    /// contributed by Claude Code
+    /// </summary>
+    [Fact]
+    public void VirtualNodes_ImproveDistribution()
+    {
+        var singleVnodeRing = new HashRing(1);
+        var multiVnodeRing = new HashRing(100);
+        
+        singleVnodeRing.AddNode("node1");
+        singleVnodeRing.AddNode("node2");
+        singleVnodeRing.AddNode("node3");
+        
+        multiVnodeRing.AddNode("node1");
+        multiVnodeRing.AddNode("node2");
+        multiVnodeRing.AddNode("node3");
+
+        var nodeCounts1 = new Dictionary<string, int> { ["node1"] = 0, ["node2"] = 0, ["node3"] = 0 };
+        var nodeCounts100 = new Dictionary<string, int> { ["node1"] = 0, ["node2"] = 0, ["node3"] = 0 };
+
+        for (var i = 0; i < 10000; i++)
+        {
+            var key = $"key{i}";
+            nodeCounts1[singleVnodeRing.FindNodeFor(key)]++;
+            nodeCounts100[multiVnodeRing.FindNodeFor(key)]++;
+        }
+
+        var singleVnodeVariance = CalculateVariance(nodeCounts1.Values);
+        var multiVnodeVariance = CalculateVariance(nodeCounts100.Values);
+        
+        Assert.True(multiVnodeVariance < singleVnodeVariance, 
+            $"Multi-vnode variance ({multiVnodeVariance:F2}) should be less than single-vnode variance ({singleVnodeVariance:F2})");
+    }
+
+    private static double CalculateVariance(IEnumerable<int> values)
+    {
+        var valueList = values.ToList();
+        var mean = valueList.Average();
+        return valueList.Select(v => Math.Pow(v - mean, 2)).Average();
     }
 
 }

@@ -5,9 +5,17 @@ namespace ConsistentHash;
 
 public class HashRing
 {
-    private readonly List<int> _hashList = new();
-    private readonly List<string> _nodeList = new();
+    private readonly Dictionary<uint, string> _vnodeToNodeMap = new();
+    private readonly Dictionary<string, List<uint>> _nodeToVnodeMap = new();
+    private readonly List<uint> _vnodeList = new();
     private readonly ReaderWriterLockSlim _lock = new();
+    private readonly uint _virtualNodeCount;
+
+    public HashRing(uint virtualNodeCount = 1)
+    {
+        if (virtualNodeCount == 0) throw new ArgumentException("There must be at least one virtual node",  nameof(virtualNodeCount));
+        _virtualNodeCount = virtualNodeCount;
+    }
 
     /// <summary>
     /// Adds a new node to the hash ring at a position determined by hashing the node key.
@@ -18,7 +26,7 @@ public class HashRing
     /// </param>
     /// <returns>
     /// <c>true</c> if the node was successfully added to the ring; 
-    /// <c>false</c> if a node with the same hash already exists (hash collision).
+    /// <c>false</c> if the node has already been added to the ring.
     /// </returns>
     /// <exception cref="ArgumentException">
     /// Thrown when <paramref name="key"/> is <c>null</c>, empty, or consists only of whitespace.
@@ -30,21 +38,28 @@ public class HashRing
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(key, nameof(key));
 
-        var hash = this.Hash(key);
         _lock.EnterWriteLock();
         try
         {
-            var index = _hashList.BinarySearch(hash);
-            if (index >= 0) return false; // node position collision
+            if (_nodeToVnodeMap.ContainsKey(key)) return false;
+            
+            List<uint> vnodes = [];
+            for (var i = 0; i < _virtualNodeCount; i++)
+            {
+                var vnode = this.Hash($"{key}:{i}");
+                var index = _vnodeList.BinarySearch(vnode);
 
-            /* From the BinarySearch docs...
-             * [if the index is negative it] contains the bitwise complement
-             * of the index of the next element that is larger than item or,
-             * if there is no larger element, the bitwise complement of Count.
-             */
-            index = ~index;
-            _hashList.Insert(index, hash);
-            _nodeList.Insert(index, key);
+                /* From the BinarySearch docs...
+                 * [if the index is negative it] contains the bitwise complement
+                 * of the index of the next element that is larger than item or,
+                 * if there is no larger element, the bitwise complement of Count.
+                 */
+                index = ~index;
+                vnodes.Add(vnode);
+                _vnodeList.Insert(index, vnode); // add the vnode to our ring
+                _vnodeToNodeMap.Add(vnode, key); // map the vnode to the key
+            }
+            _nodeToVnodeMap.Add(key, vnodes);            
         }
         finally
         {
@@ -62,8 +77,8 @@ public class HashRing
     /// that doesn't consist only of whitespace characters.
     /// </param>
     /// <returns>
-    /// <c>true</c> if the node was found and successfully removed from the ring; 
-    /// <c>false</c> if no node with the specified key exists in the ring.
+    /// <c>true</c> if the key was found and successfully removed from the ring; 
+    /// <c>false</c> if given key is not in the ring.
     /// </returns>
     /// <exception cref="ArgumentException">
     /// Thrown when <paramref name="key"/> is <c>null</c>, empty, or consists only of whitespace.
@@ -74,14 +89,18 @@ public class HashRing
     public bool RemoveNode(string key)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(key, nameof(key));
-        var hash = this.Hash(key);
+        if (!_nodeToVnodeMap.TryGetValue(key, out var vnodes))  return false;
+        
         _lock.EnterWriteLock();
         try
         {
-            var index = _hashList.BinarySearch(hash);
-            if (index < 0) return false; // there is no node with the given key
-            _hashList.RemoveAt(index);
-            _nodeList.RemoveAt(index);
+            foreach (var vnode in vnodes)
+            {
+                var index = _vnodeList.BinarySearch(vnode);
+                _vnodeList.RemoveAt(index);
+                _vnodeToNodeMap.Remove(vnode);
+            }
+            _nodeToVnodeMap.Remove(key);
         }
         finally
         {
@@ -119,18 +138,26 @@ public class HashRing
     public string FindNodeFor(string key)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(key, nameof(key));
-        if (_nodeList.Count == 0)
+        if (_vnodeList.Count == 0)
             throw new InvalidOperationException("The list of nodes is empty. Add one or more nodes");
 
         var hash = this.Hash(key);
         _lock.EnterReadLock();
         try
         {
-            var index = _hashList.BinarySearch(hash);
-            if (index >= 0) return _nodeList[index];
-            index = ~index;
-            if (index == _hashList.Count) return _nodeList[0];
-            return _nodeList[index];
+            /* From the BinarySearch docs...
+             * [if the index is negative it] contains the bitwise complement
+             * of the index of the next element that is larger than item or,
+             * if there is no larger element, the bitwise complement of Count.
+             */
+            var index = _vnodeList.BinarySearch(hash);
+            if (index < 0) index = ~index;
+            if (index >= _vnodeList.Count) index = 0;
+            var vnode = _vnodeList[index];
+            if (! _vnodeToNodeMap.TryGetValue(vnode, out var node))
+                throw new InvalidOperationException($"A matching vnode was found but could not be mapped to the node");
+            
+            return node;
         }
         finally
         {
@@ -138,10 +165,10 @@ public class HashRing
         }
     }
 
-    private int Hash(string key)
+    private uint Hash(string key)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(key, nameof(key));
         var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(key));
-        return BitConverter.ToInt32(bytes, 0);
+        return BitConverter.ToUInt32(bytes, 0);
     }
 }

@@ -24,6 +24,7 @@ The `HashRing` class provides a basic consistent hashing implementation with the
 - **32-bit hash space** using the first 4 bytes of SHA256 hash output
 - **SHA256 hashing** for key distribution
 - **Binary search** for efficient node lookup
+- **virtual nodes** for better key distribution
 - **Wrap-around behavior** for proper ring semantics
 
 ## Usage Example
@@ -49,6 +50,5 @@ hashRing.RemoveNode("server2");
 This is a simplified implementation for learning purposes.
 Possible enhancements:
 
-- **Virtual nodes** the automatic creation of virtual nodes to improve distribution
 - **Replication factor** for fault tolerance
 
