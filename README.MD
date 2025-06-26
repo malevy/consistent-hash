@@ -48,7 +48,3 @@ hashRing.RemoveNode("server2");
 ## Limitations
 
 This is a simplified implementation for learning purposes.
-Possible enhancements:
-
-- **Replication factor** for fault tolerance
-

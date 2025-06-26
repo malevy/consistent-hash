@@ -135,12 +135,54 @@ public class HashRing
     /// This method is thread-safe.
     /// </para>
     /// </remarks>
-    public string FindNodeFor(string key)
+    public string? FindNodeFor(string key)
+    {
+        var nodes = FindNodeFor(key, 1);
+        return nodes?.Length > 0 ? nodes[0] : null;
+    }
+
+    /// <summary>
+    /// Finds the appropriate node in the hash ring for the given key using consistent hashing.
+    /// </summary>
+    /// <param name="key">
+    /// The key to find a node for. Must be a non-null, non-empty string 
+    /// that doesn't consist only of whitespace characters.
+    /// </param>
+    /// <param name="replicationFactor">
+    /// The number of nodes that this key should be replication over
+    /// </param>
+    /// <returns>
+    /// The key of the node that should handle the given key according to the consistent 
+    /// hashing algorithm. This will be the first node in the ring whose hash value is 
+    /// greater than or equal to the hash of the input key, or the first node in the ring 
+    /// if no such node exists (wrap-around behavior).
+    ///
+    /// More than one unique node will be returned if the replicationFactor is set to a value
+    /// greater than one (1). The order of the returned nodes will match the sequence of the
+    /// nodes on the ring starting with the first matched node. 
+    /// </returns>
+    /// <exception cref="ArgumentException">
+    /// Thrown when <paramref name="key"/> is <c>null</c>, empty, or consists only of whitespace.
+    /// </exception>
+    /// <exception cref="InvalidOperationException">
+    /// Thrown when the hash ring is empty (contains no nodes). At least one node must be 
+    /// added to the ring before this method can be called.
+    /// </exception>
+    /// <remarks>
+    /// <para>
+    /// This method is thread-safe.
+    /// </para>
+    /// </remarks>
+    public string[] FindNodeFor(string key, uint replicationFactor)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(key, nameof(key));
         if (_vnodeList.Count == 0)
             throw new InvalidOperationException("The list of nodes is empty. Add one or more nodes");
 
+        if (replicationFactor > _nodeToVnodeMap.Count)
+            throw new ArgumentOutOfRangeException(nameof(replicationFactor),
+                "The replication factor cannot be larger than the number of registered nodes");
+        
         var hash = this.Hash(key);
         _lock.EnterReadLock();
         try
@@ -152,12 +194,29 @@ public class HashRing
              */
             var index = _vnodeList.BinarySearch(hash);
             if (index < 0) index = ~index;
-            if (index >= _vnodeList.Count) index = 0;
-            var vnode = _vnodeList[index];
-            if (! _vnodeToNodeMap.TryGetValue(vnode, out var node))
-                throw new InvalidOperationException($"A matching vnode was found but could not be mapped to the node");
             
-            return node;
+            List<string> nodes = [];
+            var resetCount = 0;
+            while (nodes.Count < replicationFactor)
+            {
+                if (index >= _vnodeList.Count)
+                {
+                    index = 0;
+                    resetCount++;
+                    
+                    // we somehow made it around the ring at least once but didn't 
+                    // collect enough unique nodes to make the replication factor.
+                    // return what we have.
+                    if (resetCount >= 2) return nodes.ToArray();
+                }
+                var vnode = _vnodeList[index];
+                if (!_vnodeToNodeMap.TryGetValue(vnode, out var node))
+                    throw new InvalidOperationException($"A matching vnode was found but could not be mapped to the node");
+                if (!nodes.Contains(node)) nodes.Add(node);
+                index++;
+            }
+
+            return nodes.ToArray();
         }
         finally
         {

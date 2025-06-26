@@ -208,6 +208,23 @@ public class HashRingTests
             $"Multi-vnode variance ({multiVnodeVariance:F2}) should be less than single-vnode variance ({singleVnodeVariance:F2})");
     }
 
+    [Fact]
+    public void FindNodeFor_WithReplicationFactor_ReturnsMultipleResults()
+    {
+        var hashRing = new HashRing(2);
+        hashRing.AddNode("node3");
+        hashRing.AddNode("node2");
+        hashRing.AddNode("node1");
+
+        var testKey = "testKey";
+        var result1 = hashRing.FindNodeFor(testKey, 2);
+
+
+        Assert.Equal(2, result1.Length);
+        Assert.Equal(result1.Length, result1.Distinct().Count());
+    }
+
+    
     private static double CalculateVariance(IEnumerable<int> values)
     {
         var valueList = values.ToList();
